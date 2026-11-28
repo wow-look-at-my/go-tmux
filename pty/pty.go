@@ -77,9 +77,6 @@ func Open(cols, rows int) (master, slave *os.File, err error) {
 		return nil, nil, fmt.Errorf("pty: open the terminal multiplexer device: %w", err)
 	}
 	name, err := unlock(master)
-	if err == nil {
-		err = SetSize(master, cols, rows)
-	}
 	if err != nil {
 		master.Close()
 		return nil, nil, err
@@ -88,6 +85,12 @@ func Open(cols, rows int) (master, slave *os.File, err error) {
 	if err != nil {
 		master.Close()
 		return nil, nil, fmt.Errorf("pty: open %s: %w", name, err)
+	}
+	// macOS answers ENOTTY to a size set on the controlling end until the other end has been opened.
+	if err := SetSize(master, cols, rows); err != nil {
+		slave.Close()
+		master.Close()
+		return nil, nil, err
 	}
 	return master, slave, nil
 }

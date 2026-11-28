@@ -95,15 +95,11 @@ func Open(cols, rows int) (master, slave *os.File, err error) {
 	return master, slave, nil
 }
 
-// SetSize tells a terminal its size. A darwin host takes the request on the other end.
+// SetSize tells a terminal its size through its controlling end. The request is Linux's on every host: the cosmo
+// runtime turns it into Apple's on macOS, and answers Apple's own number with ENOSYS.
 func SetSize(master *os.File, cols, rows int) error {
 	ws := &unix.Winsize{Col: uint16(max(1, cols)), Row: uint16(max(1, rows))}
-	var err error
-	if onDarwin {
-		err = setSizeDarwin(master, ws)
-	} else {
-		err = control(master, func(fd int) error { return unix.IoctlSetWinsize(fd, unix.TIOCSWINSZ, ws) })
-	}
+	err := control(master, func(fd int) error { return unix.IoctlSetWinsize(fd, unix.TIOCSWINSZ, ws) })
 	if err != nil {
 		return fmt.Errorf("pty: set the terminal size: %w", err)
 	}
@@ -182,9 +178,6 @@ func (p *Pty) Kill() { _ = p.cmd.Process.Kill() }
 
 // Foreground is the process group now in the foreground of the terminal: the shell at a prompt, or the job it runs.
 func (p *Pty) Foreground() (int, error) {
-	if onDarwin {
-		return foregroundDarwin(p.master)
-	}
 	var pgrp int
 	err := control(p.master, func(fd int) error {
 		var err error

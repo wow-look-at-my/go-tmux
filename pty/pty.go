@@ -102,23 +102,6 @@ func SetSize(master *os.File, cols, rows int) error {
 	return nil
 }
 
-// unlock makes the other end of the terminal openable and reports its path.
-func unlock(master *os.File) (string, error) {
-	var name string
-	err := control(master, func(fd int) error {
-		if err := unix.IoctlSetPointerInt(fd, unix.TIOCSPTLCK, 0); err != nil {
-			return fmt.Errorf("pty: unlock the terminal: %w", err)
-		}
-		n, err := unix.IoctlGetUint32(fd, unix.TIOCGPTN)
-		if err != nil {
-			return fmt.Errorf("pty: read the terminal's number: %w", err)
-		}
-		name = "/dev/pts/" + strconv.FormatUint(uint64(n), 10)
-		return nil
-	})
-	return name, err
-}
-
 // control runs fn on the descriptor without taking the file out of the poller.
 func control(f *os.File, fn func(fd int) error) error {
 	conn, err := f.SyscallConn()
@@ -208,9 +191,16 @@ type Process struct {
 	Dir string
 }
 
-// Describe reads a process's name and working directory from the proc filesystem. A host without one reports an
-// error, and a caller then shows neither.
+// Describe reads a process's name and working directory. A process that is gone reports an error.
 func Describe(pid int) (Process, error) {
+	if onDarwin {
+		return describeDarwin(pid)
+	}
+	return describeLinux(pid)
+}
+
+// describeLinux reads the proc filesystem.
+func describeLinux(pid int) (Process, error) {
 	root := "/proc/" + strconv.Itoa(pid)
 	name, err := os.ReadFile(root + "/comm")
 	if err != nil {

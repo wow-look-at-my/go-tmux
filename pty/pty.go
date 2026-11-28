@@ -77,9 +77,6 @@ func Open(cols, rows int) (master, slave *os.File, err error) {
 		return nil, nil, fmt.Errorf("pty: open the terminal multiplexer device: %w", err)
 	}
 	name, err := unlock(master)
-	if err == nil {
-		err = SetSize(master, cols, rows)
-	}
 	if err != nil {
 		master.Close()
 		return nil, nil, err
@@ -89,10 +86,17 @@ func Open(cols, rows int) (master, slave *os.File, err error) {
 		master.Close()
 		return nil, nil, fmt.Errorf("pty: open %s: %w", name, err)
 	}
+	// macOS answers ENOTTY to a size set on the controlling end until the other end has been opened.
+	if err := SetSize(master, cols, rows); err != nil {
+		slave.Close()
+		master.Close()
+		return nil, nil, err
+	}
 	return master, slave, nil
 }
 
-// SetSize tells a terminal its size through its controlling end.
+// SetSize tells a terminal its size through its controlling end. The request is Linux's on every host: the cosmo
+// runtime turns it into Apple's on macOS, and answers Apple's own number with ENOSYS.
 func SetSize(master *os.File, cols, rows int) error {
 	ws := &unix.Winsize{Col: uint16(max(1, cols)), Row: uint16(max(1, rows))}
 	err := control(master, func(fd int) error { return unix.IoctlSetWinsize(fd, unix.TIOCSWINSZ, ws) })
@@ -100,23 +104,6 @@ func SetSize(master *os.File, cols, rows int) error {
 		return fmt.Errorf("pty: set the terminal size: %w", err)
 	}
 	return nil
-}
-
-// unlock makes the other end of the terminal openable and reports its path.
-func unlock(master *os.File) (string, error) {
-	var name string
-	err := control(master, func(fd int) error {
-		if err := unix.IoctlSetPointerInt(fd, unix.TIOCSPTLCK, 0); err != nil {
-			return fmt.Errorf("pty: unlock the terminal: %w", err)
-		}
-		n, err := unix.IoctlGetUint32(fd, unix.TIOCGPTN)
-		if err != nil {
-			return fmt.Errorf("pty: read the terminal's number: %w", err)
-		}
-		name = "/dev/pts/" + strconv.FormatUint(uint64(n), 10)
-		return nil
-	})
-	return name, err
 }
 
 // control runs fn on the descriptor without taking the file out of the poller.
@@ -208,9 +195,16 @@ type Process struct {
 	Dir string
 }
 
-// Describe reads a process's name and working directory from the proc filesystem. A host without one reports an
-// error, and a caller then shows neither.
+// Describe reads a process's name and working directory. A process that is gone reports an error.
 func Describe(pid int) (Process, error) {
+	if onDarwin {
+		return describeDarwin(pid)
+	}
+	return describeLinux(pid)
+}
+
+// describeLinux reads the proc filesystem.
+func describeLinux(pid int) (Process, error) {
 	root := "/proc/" + strconv.Itoa(pid)
 	name, err := os.ReadFile(root + "/comm")
 	if err != nil {

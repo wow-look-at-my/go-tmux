@@ -3,6 +3,7 @@ package pty
 import (
 	"io"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -116,10 +117,10 @@ func TestForegroundAndDescribeNameTheRunningJob(t *testing.T) {
 	proc, err := Describe(pgrp)
 	require.NoError(t, err)
 	assert.NotEmpty(t, proc.Name)
-	resolved, err := os.Readlink("/proc/self/cwd")
+	// macOS keeps the temporary directory behind a symbolic link, and the kernel reports the real path.
+	resolved, err := filepath.EvalSymlinks(dir)
 	require.NoError(t, err)
-	assert.NotEmpty(t, resolved)
-	assert.Equal(t, dir, proc.Dir)
+	assert.Equal(t, resolved, proc.Dir)
 }
 
 func TestDescribeReportsAProcessThatIsGone(t *testing.T) {
